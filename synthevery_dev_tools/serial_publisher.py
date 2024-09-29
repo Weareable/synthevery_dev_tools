@@ -32,7 +32,8 @@ class SerialPublisher(Node):
 
         # パブリッシャーの作成
         self.publisher_ = self.create_publisher(Float32MultiArray, 'sensor_data', 10)
-        self.orientation_publisher_ = self.create_publisher(Float32MultiArray, 'orientation_data', 10)
+        self.orientation_publisher_ = self.create_publisher(Float32MultiArray, 'orientation', 10)
+        self.global_accel_publisher_ = self.create_publisher(Float32MultiArray, 'global_accel', 10)
         self.pose_publisher_ = self.create_publisher(PoseStamped, "~/pose", 10)
 
         # 姿勢推定フィルタの初期化 
@@ -41,9 +42,6 @@ class SerialPublisher(Node):
 
         # スレッド制御用のイベント
         self._stop_event = threading.Event()
-
-        self.accel_norm_lpf = LPF(0.1)
-        self.accel_norm_lpf_diff = Difference()
 
         # 読み取りスレッドの開始
         self.read_thread = threading.Thread(target=self.read_serial_thread, daemon=True)
@@ -74,7 +72,7 @@ class SerialPublisher(Node):
                 time.sleep(1)  # エラー時に少し待機
 
     def process_packet(self, packet):
-        expected_length = 6 + 18  # MACアドレス6バイト + センサーデータ18バイト (9フィールド × 2バイト)
+        expected_length = 6 + 12  # MACアドレス6バイト + センサーデータ18バイト (9フィールド × 2バイト)
         if len(packet) < expected_length:
             self.get_logger().warn(f'不完全なパケットを受信: {len(packet)} バイト')
             return
@@ -84,16 +82,16 @@ class SerialPublisher(Node):
         mac_str = ':'.join(f'{b:02X}' for b in mac)
 
         # センサーデータの抽出
-        sensor_bytes = packet[6:24]  # 18バイト
+        sensor_bytes = packet[6:18]  # 12バイト
         # self.get_logger().info(f'Received sensor bytes: {" ".join(f"{b:02X}" for b in sensor_bytes)}')
 
         # センサーデータをリトルエンディアンの2バイト整数としてデシリアライズ
-        if len(sensor_bytes) != 18:
+        if len(sensor_bytes) != 12:
             self.get_logger().warn(f'センサーデータの長さが不正です: {len(sensor_bytes)} バイト')
             return
 
         # フォーマット文字列：リトルエンディアンの9つのshort
-        format_str = '<' + 'h' * 9  # '<'はリトルエンディアン, 'h'はshort (2バイト)
+        format_str = '<' + 'h' * 6  # '<'はリトルエンディアン, 'h'はshort (2バイト)
         try:
             values = list(struct.unpack(format_str, sensor_bytes))
         except struct.error as e:
@@ -104,20 +102,14 @@ class SerialPublisher(Node):
         msg = Float32MultiArray()
 
         # センサーデータのスケーリング
-        # accel: 10, gyro: 2000, angle: 360
+        # accel: 8, gyro: 2000
         arr = np.array(values, dtype=np.float64)
-        arr[0:3] = arr[0:3] / 32768.0 * 10.0
+        arr[0:3] = arr[0:3] / 32768.0 * 8.0
         arr[3:6] = arr[3:6] / 32768.0 * 2000.0
-        arr[6:9] = arr[6:9] / 32768.0 * 360.0
         msg.data = arr.tolist()
 
         # 姿勢推定フィルタの更新
-
-        self.accel_norm_lpf.update(np.linalg.norm(arr[0:3]))
-        self.accel_norm_lpf_diff.update(self.accel_norm_lpf.value(), datetime.datetime.now().timestamp())
-
         mahony_kp = self.default_kp - min(max(abs(1 - np.linalg.norm(arr[0:3])) * self.default_kp * 3, 0), self.default_kp * 0.99)
-        #mahony_kp = self.default_kp - min(max(abs(self.accel_norm_lpf_diff.difference()) * self.default_kp * 10, 0), self.default_kp * 0.99)
 
         self.orientation_filter.set_kp(mahony_kp)
 
@@ -139,7 +131,6 @@ class SerialPublisher(Node):
         self.pose_publisher_.publish(pose_msg)
 
         global_accel = GlobalAccel.update(arr[0:3].tolist(), self.orientation_filter.get_roll(), self.orientation_filter.get_pitch())
-        msg.data.extend(global_accel)
 
         self.publisher_.publish(msg)
         self.get_logger().debug(f'MAC {mac_str} からデータをパブリッシュ: {msg.data}')
@@ -153,6 +144,10 @@ class SerialPublisher(Node):
             mahony_kp,
         ]
         self.orientation_publisher_.publish(orientation_msg)
+
+        global_accel_msg = Float32MultiArray()
+        global_accel_msg.data = global_accel
+        self.global_accel_publisher_.publish(global_accel_msg)
 
     def close_serial(self):
         self._stop_event.set()
