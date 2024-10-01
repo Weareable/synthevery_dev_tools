@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import numpy as np
+from synthevery_dev_tools.orientation import mahony
 from synthevery_dev_tools.orientation.mahony import MahonyFilter
 from synthevery_dev_tools.sensor.global_accel import GlobalAccel
 from synthevery_dev_tools.feature.signal_features import LPF, Difference
@@ -37,11 +38,16 @@ class SerialPublisher(Node):
         self.pose_publisher_ = self.create_publisher(PoseStamped, "~/pose", 10)
 
         # 姿勢推定フィルタの初期化 
-        self.default_kp = 30
+        self.default_kp = 20.0
+        self.high_accel_count = 0
         self.orientation_filter = MahonyFilter(self.default_kp, 0, 200)
 
         # スレッド制御用のイベント
         self._stop_event = threading.Event()
+
+        self.mahony_kp_prev = self.default_kp
+
+        self.latest_orientation = [0.0] * 7
 
         # 読み取りスレッドの開始
         self.read_thread = threading.Thread(target=self.read_serial_thread, daemon=True)
@@ -109,41 +115,76 @@ class SerialPublisher(Node):
         msg.data = arr.tolist()
 
         # 姿勢推定フィルタの更新
-        mahony_kp = self.default_kp - min(max(abs(1 - np.linalg.norm(arr[0:3])) * self.default_kp * 3, 0), self.default_kp * 0.99)
+        mahony_kp = self.default_kp - abs(1 - np.linalg.norm(arr[0:3])) * self.default_kp * 3
+
+        filter_coef = min(max(np.linalg.norm(arr[0:3]) / 2.0 * 0.1, 0.0), 0.09) + 0.9
+        
+        if (self.mahony_kp_prev < mahony_kp):
+            mahony_kp = self.mahony_kp_prev * filter_coef + mahony_kp * (1 - filter_coef)
+        else:
+            mahony_kp = self.mahony_kp_prev * 0.5 + mahony_kp * 0.5
+
+        mahony_kp = min(max(mahony_kp, 0.0), self.default_kp)
+        self.mahony_kp_prev = mahony_kp
 
         self.orientation_filter.set_kp(mahony_kp)
 
+        if (mahony_kp < 10.0):
+            self.orientation_filter.set_kp(0.0)
+
+        if (mahony_kp < 3.0):
+            self.high_accel_count = min(max(self.high_accel_count + 1, 0), 25)
+        else:
+            self.high_accel_count = max(self.high_accel_count - 1, 0)
+
         self.orientation_filter.update_imu(
-            arr[3],
-            arr[4],
-            -arr[5],
-            arr[0],
-            arr[1],
-            -arr[2],
-        )
+                arr[3],
+                arr[4],
+                -arr[5],
+                arr[0],
+                arr[1],
+                -arr[2],
+            )
+
+        if (self.high_accel_count < 20 and mahony_kp > 1.5):
+            self.latest_orientation = [
+                self.orientation_filter.get_quaternion()[0],
+                self.orientation_filter.get_quaternion()[1],
+                self.orientation_filter.get_quaternion()[2],
+                self.orientation_filter.get_quaternion()[3],
+                self.orientation_filter.get_roll(),
+                self.orientation_filter.get_pitch(),
+                self.orientation_filter.get_yaw(),
+            ]
 
         pose_msg = PoseStamped()
         pose_msg.header.stamp = self.get_clock().now().to_msg()
-        pose_msg.pose.orientation.w = self.orientation_filter.get_quaternion()[0]
-        pose_msg.pose.orientation.x = self.orientation_filter.get_quaternion()[1]
-        pose_msg.pose.orientation.y = self.orientation_filter.get_quaternion()[2]
-        pose_msg.pose.orientation.z = self.orientation_filter.get_quaternion()[3]
-        self.pose_publisher_.publish(pose_msg)
-
-        global_accel = GlobalAccel.update(arr[0:3].tolist(), self.orientation_filter.get_roll(), self.orientation_filter.get_pitch())
-
-        self.publisher_.publish(msg)
-        self.get_logger().debug(f'MAC {mac_str} からデータをパブリッシュ: {msg.data}')
+        pose_msg.pose.orientation.w = self.latest_orientation[0]
+        pose_msg.pose.orientation.x = self.latest_orientation[1]
+        pose_msg.pose.orientation.y = self.latest_orientation[2]
+        pose_msg.pose.orientation.z = self.latest_orientation[3]
+        self.pose_publisher_.publish(pose_msg)            
 
         # 姿勢推定フィルタの結果をパブリッシュ
         orientation_msg = Float32MultiArray()
         orientation_msg.data = [
-            self.orientation_filter.get_roll(),
-            self.orientation_filter.get_pitch(),
-            self.orientation_filter.get_yaw(),
+            self.latest_orientation[4],
+            self.latest_orientation[5],
+            self.latest_orientation[6],
             mahony_kp,
+            np.linalg.norm(arr[0:3]),
+            float(self.high_accel_count)
         ]
+        
         self.orientation_publisher_.publish(orientation_msg)
+
+        global_accel = GlobalAccel.update(arr[0:3].tolist(), self.latest_orientation[4], self.latest_orientation[5])
+
+        msg.data.extend(global_accel)
+        msg.data.extend(orientation_msg.data)
+
+        self.publisher_.publish(msg)
+        self.get_logger().debug(f'MAC {mac_str} からデータをパブリッシュ: {msg.data}')
 
         global_accel_msg = Float32MultiArray()
         global_accel_msg.data = global_accel
