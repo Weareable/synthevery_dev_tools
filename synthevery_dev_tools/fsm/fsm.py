@@ -16,6 +16,10 @@ class StateInterface(ABC):
     def exit(self) -> None:
         pass
 
+    @abstractmethod
+    def get_name(self) -> str:
+        pass
+
 class FSMInterface(ABC):
     STATE_NONE: int = 0xFFFF
 
@@ -53,10 +57,11 @@ class FSM(FSMInterface):
             self.transition = transition
             self.target_state = target_state
 
-    def __init__(self) -> None:
+    def __init__(self, logger: Callable[[str], None] = print) -> None:
         self.states = []
         self.transitions = []
         self.current_state = FSMInterface.STATE_NONE
+        self.logger = logger
 
     def update(self) -> None:
         if self.check_state_id(self.current_state):
@@ -108,16 +113,24 @@ class FSM(FSMInterface):
         if isinstance(state, StateInterface):
             state = self.get_state_id(state)
 
+        from_name = ""
+        to_name = ""
         if self.check_state_id(self.current_state):
             self.states[self.current_state].exit()
+            from_name = self.states[self.current_state].get_name()
 
         if self.check_state_id(state):
             self.current_state = state
             self.states[self.current_state].enter()
+            to_name = self.states[self.current_state].get_name()
+        
+        if from_name != "" and to_name != "":
+            self.logger(f"FSM: transition from {from_name} to {to_name}")
 
 
 class State(StateInterface, StateSignals):
-    def __init__(self) -> None:
+    def __init__(self, name: str = "") -> None:
+        self.name = name
         self.on_enter_signal = Signal()
         self.on_update_signal = Signal()
         self.on_exit_signal = Signal()
@@ -139,6 +152,9 @@ class State(StateInterface, StateSignals):
 
     def on_exit(self) -> Signal:
         return self.on_exit_signal
+    
+    def get_name(self) -> str:
+        return self.name
 
 
 class FSMTimer:
