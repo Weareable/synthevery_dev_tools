@@ -22,6 +22,7 @@ class OrientationData:
 class SensorData:
     def __init__(self):
         self.accel = AccelData()
+        self.global_accel = AccelData()
         self.gyro = GyroData()
         self.orientation = OrientationData()
 
@@ -32,7 +33,10 @@ class SensorData:
         self.gyro.x = float(msg.data[3])
         self.gyro.y = float(msg.data[4])
         self.gyro.z = float(msg.data[5])
-        self.orientation.roll = float(msg.data[6])
-        self.orientation.pitch = float(msg.data[7])
-        self.orientation.yaw = float(msg.data[8])
+        self.global_accel.x = float(msg.data[6])
+        self.global_accel.y = float(msg.data[7])
+        self.global_accel.z = float(msg.data[8])
+        self.orientation.roll = float(msg.data[9])
+        self.orientation.pitch = float(msg.data[10])
+        self.orientation.yaw = float(msg.data[11])
         
