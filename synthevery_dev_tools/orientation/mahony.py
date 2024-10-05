@@ -1,4 +1,5 @@
 import math
+import synthevery_dev_tools.orientation.util as util
 
 class MahonyFilter:
     def __init__(self, prop_gain=0.5, int_gain=0.0, sample_freq=512.0):
@@ -43,11 +44,7 @@ class MahonyFilter:
         """
         Computes roll, pitch, and yaw from the current quaternion.
         """
-        self.roll = math.atan2(self.q0 * self.q1 + self.q2 * self.q3,
-                               0.5 - self.q1 * self.q1 - self.q2 * self.q2)
-        self.pitch = math.asin(-2.0 * (self.q1 * self.q3 - self.q0 * self.q2))
-        self.yaw = math.atan2(self.q1 * self.q2 + self.q0 * self.q3,
-                              0.5 - self.q2 * self.q2 - self.q3 * self.q3)
+        self.roll, self.pitch, self.yaw = util.quaternion_to_euler(self.q0, self.q1, self.q2, self.q3)
 
         self.grav[0] = 2.0 * (self.q1 * self.q3 - self.q0 * self.q2)
         self.grav[1] = 2.0 * (self.q0 * self.q1 + self.q2 * self.q3)
