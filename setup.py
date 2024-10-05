@@ -33,6 +33,9 @@ setup(
     entry_points={
         'console_scripts': [
             'serial_publisher = synthevery_dev_tools.serial_publisher:main',
+            'synthevery_serial_bridge = synthevery_dev_tools.synthevery_serial_bridge:main',
+            'adaptive_kp_mahony_orientation_filter = synthevery_dev_tools.adaptive_kp_mahony_orientation_filter:main',
+            'global_accel_publisher = synthevery_dev_tools.global_accel_publisher:main',
             'mesh_publisher = synthevery_dev_tools.mesh_publisher:main',
             'state_machine = synthevery_dev_tools.state_machine:main',
         ],
