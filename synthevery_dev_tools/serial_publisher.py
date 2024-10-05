@@ -12,7 +12,7 @@ import time
 import numpy as np
 from synthevery_dev_tools.orientation import mahony
 from synthevery_dev_tools.orientation.mahony import MahonyFilter
-from synthevery_dev_tools.sensor.global_accel import GlobalAccel
+from synthevery_dev_tools.orientation.global_accel import GlobalAccel
 from synthevery_dev_tools.feature.signal_features import LPF, Difference
 
 class SerialPublisher(Node):
@@ -34,13 +34,17 @@ class SerialPublisher(Node):
         # パブリッシャーの作成
         self.publisher_ = self.create_publisher(Float32MultiArray, 'sensor_data', 10)
         self.orientation_publisher_ = self.create_publisher(Float32MultiArray, 'orientation', 10)
+        
         self.global_accel_publisher_ = self.create_publisher(Float32MultiArray, 'global_accel', 10)
         self.pose_publisher_ = self.create_publisher(PoseStamped, "~/pose", 10)
+        self.raw_pose_publisher_ = self.create_publisher(PoseStamped, "~/raw_pose", 10)
 
         # 姿勢推定フィルタの初期化 
         self.default_kp = 20.0
         self.high_accel_count = 0
         self.orientation_filter = MahonyFilter(self.default_kp, 0, 200)
+
+        self.raw_orientation_filter = MahonyFilter(self.default_kp, 0, 200)
 
         # スレッド制御用のイベント
         self._stop_event = threading.Event()
@@ -164,6 +168,23 @@ class SerialPublisher(Node):
         pose_msg.pose.orientation.y = self.latest_orientation[2]
         pose_msg.pose.orientation.z = self.latest_orientation[3]
         self.pose_publisher_.publish(pose_msg)            
+
+        self.raw_orientation_filter.update_imu(
+                arr[3],
+                arr[4],
+                -arr[5],
+                arr[0],
+                arr[1],
+                -arr[2],
+            )
+        
+        raw_pose_msg = PoseStamped()
+        raw_pose_msg.header.stamp = self.get_clock().now().to_msg()
+        raw_pose_msg.pose.orientation.w = self.raw_orientation_filter.get_quaternion()[0]
+        raw_pose_msg.pose.orientation.x = self.raw_orientation_filter.get_quaternion()[1]
+        raw_pose_msg.pose.orientation.y = self.raw_orientation_filter.get_quaternion()[2]
+        raw_pose_msg.pose.orientation.z = self.raw_orientation_filter.get_quaternion()[3]
+        self.raw_pose_publisher_.publish(raw_pose_msg)
 
         # 姿勢推定フィルタの結果をパブリッシュ
         orientation_msg = Float32MultiArray()
