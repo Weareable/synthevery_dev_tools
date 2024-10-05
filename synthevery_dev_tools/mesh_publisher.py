@@ -21,7 +21,7 @@ class MeshPublisher(Node):
 
         # 初期マーカーの設定
         self.marker = Marker()
-        self.marker.header.frame_id = "map"  # 使用する座標フレーム
+        self.marker.header.frame_id = self.declare_parameter("frame_id", "map").get_parameter_value().string_value
         self.marker.ns = "synthevery"
         self.marker.id = 0
         self.marker.type = Marker.MESH_RESOURCE
@@ -32,18 +32,20 @@ class MeshPublisher(Node):
         self.marker.mesh_use_embedded_materials = True  # メッシュに埋め込まれたマテリアルを使用
 
         # 位置と向きを初期化
-        self.marker.pose.position.x = 0.0
-        self.marker.pose.position.y = 0.0
-        self.marker.pose.position.z = 0.0
+        self.default_position = [
+            self.declare_parameter("x", 0.0).get_parameter_value().double_value,
+            self.declare_parameter("y", 0.0).get_parameter_value().double_value,
+            self.declare_parameter("z", 0.0).get_parameter_value().double_value,
+        ]
         self.marker.pose.orientation.x = 0.0
         self.marker.pose.orientation.y = 0.0
         self.marker.pose.orientation.z = 0.0
         self.marker.pose.orientation.w = 1.0
 
         # スケールを設定
-        self.marker.scale.x = 1.0
-        self.marker.scale.y = 1.0
-        self.marker.scale.z = 1.0
+        self.marker.scale.x = self.declare_parameter("scale", 10.0).get_parameter_value().double_value
+        self.marker.scale.y = self.marker.scale.x
+        self.marker.scale.z = self.marker.scale.x
 
         # 色を設定（メッシュに色が埋め込まれている場合は不要）
         self.marker.color.a = 1.0  # 不透明
@@ -54,6 +56,9 @@ class MeshPublisher(Node):
     def pose_callback(self, msg: PoseStamped):
         self.marker.header.stamp = self.get_clock().now().to_msg()
         self.marker.pose = msg.pose  # 受信したPoseでマーカーのポーズを更新
+        self.marker.pose.position.x = self.default_position[0]
+        self.marker.pose.position.y = self.default_position[1]
+        self.marker.pose.position.z = self.default_position[2]
         self.publisher_.publish(self.marker)
 
 
