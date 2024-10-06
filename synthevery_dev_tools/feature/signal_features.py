@@ -1,4 +1,5 @@
 from collections import deque
+import math
 
 class MovingWindow:
     def __init__(self, window_size: int):
@@ -78,7 +79,7 @@ class Peak:
         return self.current_max_peak - self.current_min_peak
 
 # LPF クラス
-class LPF:
+class BackwardDifferenceLPF:
     def __init__(self, alpha: float):
         self.alpha = alpha
         self.value_ = 0.0
@@ -88,3 +89,47 @@ class LPF:
 
     def value(self) -> float:
         return self.value_
+    
+    @staticmethod
+    def calc_coef(cutoff_frequency: float, sample_time: float):
+        cutoff_rads = 2.0 * math.pi * cutoff_frequency
+        alpha = sample_time * cutoff_rads / (1.0 + sample_time * cutoff_rads)
+        return alpha
+    
+    def set_coef(self, alpha: float):
+        self.alpha = alpha
+
+    @staticmethod
+    def from_cutoff_frequency(cutoff_frequency: float, sample_time: float):
+        return BackwardDifferenceLPF(BackwardDifferenceLPF.calc_coef(cutoff_frequency, sample_time))
+    
+class BilinearTransformLPF:
+    def __init__(self, alpha: float, beta: float):
+        self.alpha = alpha
+        self.beta = beta
+        self.previous_input = 0.0
+        self.previous_output = 0.0
+        self.current_output = 0.0
+
+    @staticmethod
+    def calc_coef(cutoff_frequency: float, sample_time: float):
+        cutoff_rads = 2.0 * math.pi * cutoff_frequency
+        alpha = sample_time * cutoff_rads / (2.0 + sample_time * cutoff_rads)
+        beta = (sample_time * cutoff_rads - 2.0) / (sample_time * cutoff_rads + 2.0)
+        return alpha, beta
+    
+    def set_coef(self, alpha: float, beta: float):
+        self.alpha = alpha
+        self.beta = beta
+
+    @staticmethod
+    def from_cutoff_frequency(cutoff_frequency: float, sample_time: float):
+        return BilinearTransformLPF(*BilinearTransformLPF.calc_coef(cutoff_frequency, sample_time))
+
+    def update(self, current_input: float):
+        self.current_output = self.alpha * (current_input + self.previous_input) - self.beta * self.previous_output
+        self.previous_input = current_input
+        self.previous_output = self.current_output
+
+    def value(self) -> float:
+        return self.current_output
