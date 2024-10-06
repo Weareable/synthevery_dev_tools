@@ -1,0 +1,40 @@
+{
+    "84FCE6780D01": {
+        "device_name": "sev01",
+        "frame_id": "sev01/body",
+        "world_frame": {
+            "parent_frame_id": "world",
+            "frame_id": "sev01/world",
+            "position": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "orientation": {
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            }
+        }
+    },
+    "84FCE6781F15": {
+        "device_name": "sev02",
+        "frame_id": "sev02/body",
+        "world_frame": {
+            "parent_frame_id": "world",
+            "frame_id": "sev02/world",
+            "position": {
+                "x": 2.0,
+                "y": 0.0,
+                "z": 0.0
+            },
+            "orientation": {
+                "w": 1.0,
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+            }
+        }
+    }
+}
