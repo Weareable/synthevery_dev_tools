@@ -4,8 +4,10 @@ from blinker import Signal
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
+from geometry_msgs.msg import Vector3Stamped, Vector3
+from message_filters import Subscriber, ApproximateTimeSynchronizer
 import numpy as np
-from synthevery_dev_tools.feature.signal_features import LPF, Difference, Peak
+from synthevery_dev_tools.feature.signal_features import BackwardDifferenceLPF, Difference, Peak
 from synthevery_dev_tools.fsm.fsm import FSM, State, Transition, FSMStopwatch ,FSMTimer
 from synthevery_dev_tools.sensor.sensor_data import SensorData
 
@@ -15,15 +17,40 @@ class StateMachine(Node):
         super().__init__('state_machine')
         self.init_features()
         self.init_fsm()
-        self.sensor_subscriber = self.create_subscription(Float32MultiArray, "/sensor_data", self.sensor_callback, 10)
-        self.sensor_data = SensorData()
+
+        self.accel = Vector3()
+        self.gyro = Vector3()
+        self.orientation_rpy = Vector3()
+        self.global_accel = Vector3()
+
+        self.accel_subscriber = Subscriber(self, Vector3Stamped, "~/accel")
+        self.gyro_subscriber = Subscriber(self, Vector3Stamped, "~/gyro")
+        self.orientation_rpy_subscriber = Subscriber(self, Vector3Stamped, "~/orientation_rpy")
+        self.global_accel_subscriber = Subscriber(self, Vector3Stamped, "~/global_accel")
+        self.time_synchronizer = ApproximateTimeSynchronizer(
+            [self.accel_subscriber, self.gyro_subscriber, self.orientation_rpy_subscriber, self.global_accel_subscriber], 
+            queue_size=10, 
+            slop=0.05
+        )
+        self.time_synchronizer.registerCallback(self.sensor_callback)
+        
 
         self.feature_publisher = self.create_publisher(Float32MultiArray, "~/feature", 10)
         self.tap_publisher = self.create_publisher(Float32MultiArray, "~/tap", 10)
 
+    def sensor_callback(self, accel, gyro, orientation_rpy, global_accel):
+        self.accel = accel.vector
+        self.gyro = gyro.vector
+        self.orientation_rpy = orientation_rpy.vector
+        self.global_accel = global_accel.vector
+
+        self.update_features()
+        self.fsm.update()
+
+
     def init_features(self):
         self.global_accel_z_peak = Peak(15)
-        self.global_accel_z_lpf = LPF(0.7)
+        self.global_accel_z_lpf = BackwardDifferenceLPF(0.7)
         self.global_accel_z_difference = Difference()
         self.global_accel_z_min_peak_difference = Difference()
         self.gyro_x_peak = Peak(15)
@@ -31,13 +58,13 @@ class StateMachine(Node):
         self.gyro_z_peak = Peak(8)
 
     def update_features(self):
-        self.global_accel_z_peak.update(self.sensor_data.global_accel.z)
-        self.global_accel_z_lpf.update(self.sensor_data.global_accel.z)
+        self.global_accel_z_peak.update(self.global_accel.z)
+        self.global_accel_z_lpf.update(self.global_accel.z)
         self.global_accel_z_difference.update(self.global_accel_z_lpf.value(), datetime.datetime.now().timestamp())
         self.global_accel_z_min_peak_difference.update(self.global_accel_z_peak.min_peak(), datetime.datetime.now().timestamp())
-        self.gyro_x_peak.update(self.sensor_data.gyro.x)
-        self.gyro_y_peak.update(self.sensor_data.gyro.y)
-        self.gyro_z_peak.update(self.sensor_data.gyro.z)
+        self.gyro_x_peak.update(self.gyro.x)
+        self.gyro_y_peak.update(self.gyro.y)
+        self.gyro_z_peak.update(self.gyro.z)
 
         feature_msg = Float32MultiArray()
         feature_msg.data = [
@@ -71,12 +98,12 @@ class StateMachine(Node):
         self.tap_state_tapped_stopwatch.bind(self.tap_state_tapped)
 
         self.tap_idle_to_tapping_transition = Transition(lambda: (
-            self.sensor_data.global_accel.z > 0.4 and 
+            self.global_accel.z > 0.4 and 
             self.global_accel_z_difference.difference() < -0.01
         ))
 
         self.tap_tapping_to_tapped_transition = Transition(lambda: (
-            self.sensor_data.global_accel.z < -0.6 and
+            self.global_accel.z < -0.6 and
             self.global_accel_z_difference.difference() > 0.02
         ))
         self.tap_tapping_to_tapped_by_shock_transition = Transition(lambda: self.global_accel_z_difference.difference() < -2)
@@ -85,7 +112,7 @@ class StateMachine(Node):
         self.fsm.add_state(self.tap_state_tapping)
         self.fsm.add_state(self.tap_state_tapped)
         self.fsm.add_transition(self.tap_state_idle, self.tap_state_tapping, self.tap_idle_to_tapping_transition)
-        self.fsm.add_transition(self.tap_state_tapping, self.tap_state_tapping, Transition(lambda: self.sensor_data.global_accel.z > 0.6))
+        self.fsm.add_transition(self.tap_state_tapping, self.tap_state_tapping, Transition(lambda: self.global_accel.z > 0.6))
         self.fsm.add_transition(self.tap_state_tapping, self.tap_state_tapped, self.tap_tapping_to_tapped_transition)
         self.fsm.add_transition(self.tap_state_tapping, self.tap_state_tapped, self.tap_tapping_to_tapped_by_shock_transition)
 
@@ -94,7 +121,7 @@ class StateMachine(Node):
         self.tap_measuring_timer.on_timeout().connect(self.on_tap, weak=False)
 
         # timeout: tapping -> idle
-        self.fsm.add_transition(self.tap_state_tapping, self.tap_state_idle, Transition(lambda: self.tap_state_tapping_stopwatch.get_elapsed_ms() > 100 and self.sensor_data.global_accel.z < 0.3 and self.global_accel_z_difference.difference() > -0.1))
+        self.fsm.add_transition(self.tap_state_tapping, self.tap_state_idle, Transition(lambda: self.tap_state_tapping_stopwatch.get_elapsed_ms() > 100 and self.global_accel.z < 0.3 and self.global_accel_z_difference.difference() > -0.1))
         self.fsm.add_transition(self.tap_state_tapping, self.tap_state_idle, Transition(lambda: self.tap_state_tapping_stopwatch.get_elapsed_ms() > 350))
 
         # timeout: tapped -> idle
@@ -107,11 +134,6 @@ class StateMachine(Node):
         tap_msg = Float32MultiArray()
         tap_msg.data = [self.global_accel_z_peak.peak_to_peak()]
         self.tap_publisher.publish(tap_msg)
-
-    def sensor_callback(self, msg: Float32MultiArray):
-        self.sensor_data.update(msg)
-        self.update_features()
-        self.fsm.update()
 
 def main(args=None):
     rclpy.init(args=args)
