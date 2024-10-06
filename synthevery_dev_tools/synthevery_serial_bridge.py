@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import numpy as np
+import json
 
 
 class SyntheverySerialBridge(Node):
@@ -18,6 +19,7 @@ class SyntheverySerialBridge(Node):
         # パラメータの宣言と取得
         self.declare_parameter('device', '/dev/ttyACM0')
         device = self.get_parameter('device').get_parameter_value().string_value
+        self.config_file = self.declare_parameter('config_file', '').get_parameter_value().string_value
 
         # シリアルポートの初期化
         try:
@@ -27,11 +29,29 @@ class SyntheverySerialBridge(Node):
             self.get_logger().error(f'シリアルデバイス {device} のオープンに失敗: {e}')
             sys.exit(1)
 
-        # パブリッシャーの作成
-        self.accel_publisher_ = self.create_publisher(Vector3Stamped, '~/accel', 10)
-        self.gyro_publisher_ = self.create_publisher(Vector3Stamped, '~/gyro', 10)
+        # デバイスリストの読み込み
+        self.device_list = {}
+        try:
+            with open(self.config_file, 'r') as f:
+                self.device_list = json.load(f)
+        except json.JSONDecodeError as e:
+            self.get_logger().error(f'デバイスリストの読み込みに失敗: {e}')
+        except FileNotFoundError as e:
+            self.get_logger().error(f'デバイスリストのファイルが見つかりません: {e}')
 
-        self.frame_id = self.declare_parameter('frame_id', 'imu_link').get_parameter_value().string_value
+        self.accel_publishers = {}
+        self.gyro_publishers = {}
+        self.orientation_publishers = {}
+        self.filtered_accel_publishers = {}
+
+        self.get_logger().info(f'デバイスリスト:')
+        for mac_str, device_info in self.device_list.items():
+            self.get_logger().info(f'- {mac_str}')
+            # パブリッシャーの作成
+            self.accel_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/accel', 10)
+            self.gyro_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/gyro', 10)
+            self.orientation_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/orientation_rpy', 10)
+            self.filtered_accel_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/filtered_accel', 10)
 
         # スレッド制御用のイベント
         self._stop_event = threading.Event()
@@ -67,26 +87,29 @@ class SyntheverySerialBridge(Node):
     def process_packet(self, packet):
         timestamp = self.get_clock().now().to_msg()
 
-        expected_length = 6 + 12  # MACアドレス6バイト + センサーデータ18バイト (9フィールド × 2バイト)
+        expected_length = 6  # MACアドレス6バイト
         if len(packet) < expected_length:
             self.get_logger().warn(f'不完全なパケットを受信: {len(packet)} バイト')
             return
 
         # MACアドレスの抽出
-        mac = packet[:6]
-        mac_str = ':'.join(f'{b:02X}' for b in mac)
+        mac = packet[:6][::-1]
+        mac_str = ''.join(f'{b:02X}' for b in mac)
+
+        if self.device_list.get(mac_str) is None:
+            self.get_logger().warn(f'リストにないデバイスからのデータを受信: {mac_str}', throttle_duration_sec=1.0)
+            return
+
+        #self.get_logger().info(f'Received packet: {mac_str}')
 
         # センサーデータの抽出
-        sensor_bytes = packet[6:18]  # 12バイト
+        sensor_bytes = packet[6:]  # 18バイト
+        data_num = len(sensor_bytes) // 2
         # self.get_logger().info(f'Received sensor bytes: {" ".join(f"{b:02X}" for b in sensor_bytes)}')
 
         # センサーデータをリトルエンディアンの2バイト整数としてデシリアライズ
-        if len(sensor_bytes) != 12:
-            self.get_logger().warn(f'センサーデータの長さが不正です: {len(sensor_bytes)} バイト')
-            return
-
         # フォーマット文字列：リトルエンディアンの9つのshort
-        format_str = '<' + 'h' * 6  # '<'はリトルエンディアン, 'h'はshort (2バイト)
+        format_str = '<' + 'h' * data_num  # '<'はリトルエンディアン, 'h'はshort (2バイト)
         try:
             values = list(struct.unpack(format_str, sensor_bytes))
         except struct.error as e:
@@ -94,29 +117,56 @@ class SyntheverySerialBridge(Node):
             return
 
         # センサーデータのスケーリング
-        # accel: 8, gyro: 2000
+        # accel: 8, gyro: 2000, orientation: 360
         arr = np.array(values, dtype=np.float64)
-        arr[0:3] = arr[0:3] / 32768.0 * 8.0
-        arr[3:6] = arr[3:6] / 32768.0 * 2000.0
 
         # 加速度データのパブリッシュ
+        if data_num < 3:
+            return
+        arr[0:3] = arr[0:3] / 32768.0 * 8.0
         accel_msg = Vector3Stamped()
         accel_msg.header.stamp = timestamp
-        accel_msg.header.frame_id = self.frame_id
+        accel_msg.header.frame_id = self.device_list[mac_str]["frame_id"]
         accel_msg.vector.x = arr[0]
         accel_msg.vector.y = arr[1]
         accel_msg.vector.z = arr[2]
-        self.accel_publisher_.publish(accel_msg)
+        self.accel_publishers[mac_str].publish(accel_msg)
 
         # ジャイロデータのパブリッシュ
+        if data_num < 6:
+            return
+        arr[3:6] = arr[3:6] / 32768.0 * 2000.0
         gyro_msg = Vector3Stamped()
         gyro_msg.header.stamp = timestamp
-        gyro_msg.header.frame_id = self.frame_id
+        gyro_msg.header.frame_id = self.device_list[mac_str]["frame_id"]
         gyro_msg.vector.x = arr[3]
         gyro_msg.vector.y = arr[4]
         gyro_msg.vector.z = arr[5]
-        self.gyro_publisher_.publish(gyro_msg)
+        self.gyro_publishers[mac_str].publish(gyro_msg)
+
+        # 姿勢データのパブリッシュ
+        if data_num < 9:
+            return
+        arr[6:9] = arr[6:9] / 32768.0 * 360.0
+        orientation_msg = Vector3Stamped()
+        orientation_msg.header.stamp = timestamp
+        orientation_msg.header.frame_id = self.device_list[mac_str]["frame_id"]
+        orientation_msg.vector.x = arr[6]
+        orientation_msg.vector.y = arr[7]
+        orientation_msg.vector.z = arr[8]
+        self.orientation_publishers[mac_str].publish(orientation_msg)
         
+        # フィルタリング加速度データのパブリッシュ
+        if data_num < 12:
+            return
+        arr[9:12] = arr[9:12] / 32768.0 * 8.0
+        filtered_accel_msg = Vector3Stamped()
+        filtered_accel_msg.header.stamp = timestamp
+        filtered_accel_msg.header.frame_id = self.device_list[mac_str]["frame_id"]
+        filtered_accel_msg.vector.x = arr[9]
+        filtered_accel_msg.vector.y = arr[10]
+        filtered_accel_msg.vector.z = arr[11]
+        self.filtered_accel_publishers[mac_str].publish(filtered_accel_msg)
 
     def close_serial(self):
         self._stop_event.set()
