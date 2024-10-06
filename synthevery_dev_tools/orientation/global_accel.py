@@ -101,23 +101,16 @@ class GlobalAccel:
         Adds 1.0 to the z-component to account for gravity.
 
         :param accel: Local acceleration vector [x, y, z].
-        :param roll: Roll angle in degrees.
-        :param pitch: Pitch angle in degrees.
+        :param roll: Roll angle in radians.
+        :param pitch: Pitch angle in radians.
         :return: Global acceleration vector [x, y, z].
         """
         if len(accel) != 3:
             raise ValueError("Acceleration vector must have exactly 3 elements [x, y, z].")
 
-        # Convert roll and pitch from degrees to radians and negate
-        try:
-            roll_rad = -math.radians(roll)
-            pitch_rad = -math.radians(pitch)
-        except Exception as e:
-            raise ValueError(f"Error converting angles to radians: {e}")
-
         # Get the quaternion from roll and pitch
         try:
-            quat = GlobalAccel.get_quaternion_from_rp(roll_rad, pitch_rad)
+            quat = GlobalAccel.get_quaternion_from_rp(roll, pitch)
         except Exception as e:
             raise ValueError(f"Error computing quaternion: {e}")
 
