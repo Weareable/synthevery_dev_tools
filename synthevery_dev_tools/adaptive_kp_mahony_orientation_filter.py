@@ -1,3 +1,4 @@
+import math
 import rclpy
 from rclpy.node import Node
 from message_filters import Subscriber, ApproximateTimeSynchronizer
@@ -9,6 +10,7 @@ import numpy as np
 
 from synthevery_dev_tools.orientation.mahony import MahonyFilter
 from synthevery_dev_tools.feature.signal_features import BilinearTransformLPF, MovingWindow
+from synthevery_dev_tools.orientation.util import euler_to_quaternion, normalize_angle_to_range
 
 
 class AdaptiveKpMahonyOrientationFilter(Node):
@@ -21,6 +23,8 @@ class AdaptiveKpMahonyOrientationFilter(Node):
 
         self.orientation_filter = MahonyFilter(self.default_kp, self.default_ki, self.filter_rate)
         self.latest_orientation = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.latest_yaw = 0.0
+        self.yaw_bias_average = MovingWindow(100)
         self.kp_prev = 0.0
         self.kp = 0.0
         self.high_accel_count = 0
@@ -122,16 +126,32 @@ class AdaptiveKpMahonyOrientationFilter(Node):
                 -self.filtered_accel[2],
             )
         
-        if (self.high_accel_count < 20 and self.kp > 1.5):
-            self.latest_orientation = [
-                self.orientation_filter.get_quaternion()[0],
-                self.orientation_filter.get_quaternion()[1],
-                self.orientation_filter.get_quaternion()[2],
-                self.orientation_filter.get_quaternion()[3],
-                self.orientation_filter.get_roll(),
-                self.orientation_filter.get_pitch(),
-                self.orientation_filter.get_yaw(),
-            ]
+        self.latest_orientation[4:6] = [
+            self.orientation_filter.get_roll(),
+            self.orientation_filter.get_pitch()
+        ]
+
+        yaw_delta = normalize_angle_to_range(self.orientation_filter.get_yaw() - self.latest_yaw, -180.0, 180.0)
+        self.latest_yaw = self.orientation_filter.get_yaw()
+
+        if abs(yaw_delta) > 0.008:
+            self.latest_orientation[6] = self.latest_orientation[6] + yaw_delta
+        else:
+            self.yaw_bias_average.update(yaw_delta)
+
+        self.get_logger().info(f"yaw_bias_average: {self.yaw_bias_average.average()}", throttle_duration_sec=1.0)
+
+        q = euler_to_quaternion(
+            -self.latest_orientation[4] / 180.0 * math.pi, 
+            -self.latest_orientation[5] / 180.0 * math.pi, 
+            self.latest_orientation[6] / 180.0 * math.pi
+        )
+
+        self.latest_orientation[0] = q[0]
+        self.latest_orientation[1] = q[1]
+        self.latest_orientation[2] = q[2]
+        self.latest_orientation[3] = q[3]
+
 
     def publish_orientation(self, time):
         msg = QuaternionStamped()
@@ -172,6 +192,19 @@ class AdaptiveKpMahonyOrientationFilter(Node):
         t.header.stamp = time
         t.header.frame_id = self.world_frame_id
         t.child_frame_id = self.frame_id
+        t.transform.translation.x = 0.0
+        t.transform.translation.y = 0.0
+        t.transform.translation.z = 0.0
+        t.transform.rotation.w = self.latest_orientation[0]
+        t.transform.rotation.x = self.latest_orientation[1]
+        t.transform.rotation.y = self.latest_orientation[2]
+        t.transform.rotation.z = self.latest_orientation[3]
+        self.tf_broadcaster.sendTransform(t)
+
+        t = TransformStamped()
+        t.header.stamp = time
+        t.header.frame_id = self.world_frame_id
+        t.child_frame_id = self.frame_id + "_raw"
         t.transform.translation.x = 0.0
         t.transform.translation.y = 0.0
         t.transform.translation.z = 0.0
