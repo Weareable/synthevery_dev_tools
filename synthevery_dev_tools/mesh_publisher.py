@@ -35,7 +35,7 @@ class MeshPublisher(Node):
         self.marker.scale.z = self.marker.scale.x
 
         # 色を設定（メッシュに色が埋め込まれている場合は不要）
-        self.marker.color.a = 1.0  # 不透明
+        self.marker.color.a = self.declare_parameter("color_alpha", 1.0).get_parameter_value().double_value  # 不透明
         self.marker.color.r = 1.0
         self.marker.color.g = 1.0
         self.marker.color.b = 1.0
