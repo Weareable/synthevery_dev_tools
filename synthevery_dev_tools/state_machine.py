@@ -104,7 +104,7 @@ class StateMachine(Node):
 
         self.tap_tapping_to_tapped_transition = Transition(lambda: (
             self.global_accel.z < -0.6 and
-            self.global_accel_z_difference.difference() > 0.02
+            self.global_accel_z_difference.difference() > 0.0
         ))
         self.tap_tapping_to_tapped_by_shock_transition = Transition(lambda: self.global_accel_z_difference.difference() < -2)
 
@@ -120,6 +120,8 @@ class StateMachine(Node):
         self.tap_measuring_timer.bind(self.tap_state_tapped)
         self.tap_measuring_timer.on_timeout().connect(self.on_tap, weak=False)
 
+        self.tap_state_tapped.on_enter().connect(self.on_tap, weak=False)
+
         # timeout: tapping -> idle
         self.fsm.add_transition(self.tap_state_tapping, self.tap_state_idle, Transition(lambda: self.tap_state_tapping_stopwatch.get_elapsed_ms() > 100 and self.global_accel.z < 0.3 and self.global_accel_z_difference.difference() > -0.1))
         self.fsm.add_transition(self.tap_state_tapping, self.tap_state_idle, Transition(lambda: self.tap_state_tapping_stopwatch.get_elapsed_ms() > 350))
@@ -132,7 +134,7 @@ class StateMachine(Node):
     def on_tap(self, sender):
         self.get_logger().warn("TAP")
         tap_msg = Float32MultiArray()
-        tap_msg.data = [self.global_accel_z_peak.peak_to_peak()]
+        tap_msg.data = [self.global_accel_z_peak.peak_to_peak(), self.orientation_rpy.x, self.orientation_rpy.y, self.orientation_rpy.z]
         self.tap_publisher.publish(tap_msg)
 
 def main(args=None):
