@@ -2,6 +2,7 @@ import datetime
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3Stamped
+from std_msgs.msg import Int32MultiArray
 import serial
 from cobs import cobs
 import struct
@@ -43,6 +44,7 @@ class SyntheverySerialBridge(Node):
         self.gyro_publishers = {}
         self.orientation_publishers = {}
         self.filtered_accel_publishers = {}
+        self.raw_data_publishers = {}
 
         self.get_logger().info(f'デバイスリスト:')
         for mac_str, device_info in self.device_list.items():
@@ -52,6 +54,7 @@ class SyntheverySerialBridge(Node):
             self.gyro_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/gyro', 10)
             self.orientation_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/orientation_rpy', 10)
             self.filtered_accel_publishers[mac_str] = self.create_publisher(Vector3Stamped, f'~/{device_info["device_name"]}/filtered_accel', 10)
+            self.raw_data_publishers[mac_str] = self.create_publisher(Int32MultiArray, f'~/{device_info["device_name"]}/raw_data', 10)
 
         # スレッド制御用のイベント
         self._stop_event = threading.Event()
@@ -115,6 +118,10 @@ class SyntheverySerialBridge(Node):
         except struct.error as e:
             self.get_logger().error(f'センサーデータのデシリアライズに失敗: {e}')
             return
+        
+        raw_data_msg = Int32MultiArray()
+        raw_data_msg.data = values
+        self.raw_data_publishers[mac_str].publish(raw_data_msg)
 
         # センサーデータのスケーリング
         # accel: 8, gyro: 2000, orientation: 360
